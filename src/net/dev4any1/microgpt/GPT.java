@@ -15,15 +15,14 @@ import java.util.Random;
 import java.util.Set;
 
 /*
- * The most atomic way to train and run inference for a GPT in pure Java :-)
+ * Port of the microgpt.py orig. source code: https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95
+ * The most atomic way to train and run inference for a GPT
  * This file is the complete algorithm.
- * Everything else is just efficiency.
+ * Everything else is just efficiency. @karpathy
  */
-
 public class GPT {
 
 	// Let there be Autograd to recursively apply the chain rule through a computation graph
-
 	record Value(double[] data, double[] grad, Value[] children, double[] localGrads) {
 
 		Value(double v) { this(new double[] { v }, new double[] { 0 }, new Value[0], new double[0]); }
@@ -86,13 +85,9 @@ public class GPT {
 			vocabSize;
 
 	static Map<String, Value[][]> sd = new HashMap<>();
-
 	static List<Value> params = new ArrayList<>();
-
 	static Random rng = new Random(42);
-
 	static List<Character> uchars;
-
 	static int BOS;
 
 	static Value[][] matrix(int nout, int nin) {
@@ -105,10 +100,8 @@ public class GPT {
 		return m;
 	}
 
-	// --- Forward operations ---
 	// Define the model architecture: a function mapping tokens and parameters to logits over what comes next
 	// Follow GPT-2, blessed among the GPTs, with minor differences: layernorm -> rmsnorm, no biases, GeLU -> ReLU
-
 	static Value[] linear(Value[] x, Value[][] w) {
 		Value[] out = new Value[w.length];
 		for (int i = 0; i < w.length; i++) {
@@ -138,9 +131,10 @@ public class GPT {
 	static Value[] gpt(int tokenId, int posId, List<Value[]>[] keys, List<Value[]>[] values) {
 		Value[] x = new Value[nEmbd];
 		for (int i = 0; i < nEmbd; i++)
-			x[i] = sd.get("wte")[tokenId][i].add(sd.get("wpe")[posId][i]);
-		x = rmsnorm(x);
+			x[i] = sd.get("wte")[tokenId][i].add(sd.get("wpe")[posId][i]); //joint token and position embedding
+		x = rmsnorm(x); // note: not redundant due to backward pass via the residual connection
 		for (int li = 0; li < nLayer; li++) {
+			// 1) Multi-head Attention block
 			Value[] xr = x;
 			x = rmsnorm(x);
 			Value[] q = linear(x, sd.get("layer" + li + ".attn_wq")), k = linear(x, sd.get("layer" + li + ".attn_wk")),
@@ -171,6 +165,7 @@ public class GPT {
 			x = linear(xAttn, sd.get("layer" + li + ".attn_wo"));
 			for (int i = 0; i < nEmbd; i++)
 				x[i] = x[i].add(xr[i]);
+			// 2) MLP block
 			xr = x;
 			x = rmsnorm(x);
 			x = linear(x, sd.get("layer" + li + ".mlp_fc1"));
@@ -212,7 +207,6 @@ public class GPT {
 		BOS = uchars.size();
 		vocabSize = uchars.size() + 1;
 		System.out.println("vocab size: " + vocabSize);
-
 		sd.put("wte", matrix(vocabSize, nEmbd));
 		sd.put("wpe", matrix(blockSize, nEmbd));
 		sd.put("lm_head", matrix(vocabSize, nEmbd));
@@ -230,7 +224,7 @@ public class GPT {
 		int nSteps = 1000;
 		double lr = 0.01, b1 = 0.85, b2 = 0.99, epsAdam = 1e-8;
 		double[] m = new double[params.size()], v = new double[params.size()];
-		
+
 		// Repeat in sequence
 		for (int step = 0; step < nSteps; step++) {
 
@@ -256,10 +250,10 @@ public class GPT {
 				loss = loss.add(probs[tokens.get(pos + 1)].log().neg());
 			}
 			loss = loss.div(Value.of(n));
-
+	
 			// Backward the loss, calculating the gradients with respect to all model parameters
 			loss.backward();
-			
+	
 			// Adam optimizer update: update the model parameters based on the corresponding gradients
 			double lrt = lr * (1.0 - step / (double) nSteps);
 			for (int i = 0; i < params.size(); i++) {
